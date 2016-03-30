@@ -297,7 +297,7 @@ func (n *netConn) writeString(p Priority, hostname, appname, msg, nl string) err
 		Timestamp: time.Now(),
 		Hostname:  hostname,
 		AppName:   appname,
-		ProcessID: os.Getppid(),
+		ProcessID: string(os.Getppid()),
 		Message:   []byte(msg),
 	}
 

@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"github.com/crewjam/rfc5424"
 )
 
 // The Priority is a combination of the syslog facility and
@@ -84,7 +85,7 @@ const (
 // A Writer is a connection to a syslog server.
 type Writer struct {
 	priority Priority
-	tag      string
+	appname  string
 	hostname string
 	network  string
 	raddr    string
@@ -103,7 +104,7 @@ var _ io.Writer = (*Writer)(nil)
 // return a type that satisfies this interface and simply calls the C
 // library syslog function.
 type serverConn interface {
-	writeString(p Priority, hostname, tag, s, nl string) error
+	writeString(p Priority, hostname, appname, s, nl string) error
 	close() error
 }
 
@@ -115,27 +116,27 @@ type netConn struct {
 // New establishes a new connection to the system log daemon.  Each
 // write to the returned writer sends a log message with the given
 // priority and prefix.
-func New(priority Priority, tag string) (w *Writer, err error) {
-	return Dial("", "", priority, tag, nil)
+func New(priority Priority, appname string) (w *Writer, err error) {
+	return Dial("", "", priority, appname, nil)
 }
 
 // Dial establishes a connection to a log daemon by connecting to
 // address raddr on the network net.  Each write to the returned
 // writer sends a log message with the given facility, severity and
-// tag.
-func Dial(network, raddr string, priority Priority, tag string, tlsCfg *tls.Config) (*Writer, error) {
+// appname.
+func Dial(network, raddr string, priority Priority, appname string, tlsCfg *tls.Config) (*Writer, error) {
 	if priority < 0 || priority > LOG_LOCAL7|LOG_DEBUG {
 		return nil, errors.New("log/syslog: invalid priority")
 	}
 
-	if tag == "" {
-		tag = os.Args[0]
+	if appname == "" {
+		appname = os.Args[0]
 	}
 	hostname, _ := os.Hostname()
 
 	w := &Writer{
 		priority: priority,
-		tag:      tag,
+		appname:  appname,
 		hostname: hostname,
 		network:  network,
 		raddr:    raddr,
@@ -274,15 +275,11 @@ func (w *Writer) writeAndRetry(p Priority, s string) (int, error) {
 }
 
 // write generates and writes a syslog formatted string. The
-// format is as follows: <PRI>TIMESTAMP HOSTNAME TAG[PID]: MSG
+// format is RFC5424.
 func (w *Writer) write(p Priority, msg string) (int, error) {
-	// ensure it ends in a \n
-	nl := ""
-	if !strings.HasSuffix(msg, "\n") {
-		nl = "\n"
-	}
+	nl := "\n"
 
-	err := w.conn.writeString(p, w.hostname, w.tag, msg, nl)
+	err := w.conn.writeString(p, w.hostname, w.appname, msg, nl)
 	if err != nil {
 		return 0, err
 	}
@@ -292,21 +289,24 @@ func (w *Writer) write(p Priority, msg string) (int, error) {
 	return len(msg), nil
 }
 
-func (n *netConn) writeString(p Priority, hostname, tag, msg, nl string) error {
-	if n.local {
-		// Compared to the network form below, the changes are:
-		//	1. Use time.Stamp instead of time.RFC3339.
-		//	2. Drop the hostname field from the Fprintf.
-		timestamp := time.Now().Format(time.Stamp)
-		_, err := fmt.Fprintf(n.conn, "<%d>%s %s[%d]: %s%s",
-			p, timestamp,
-			tag, os.Getpid(), msg, nl)
+func (n *netConn) writeString(p Priority, hostname, appname, msg, nl string) error {
+	msg = strings.Replace(msg, nl, "\\n", -1)
+
+	m := rfc5424.Message{
+		Priority:  rfc5424.Daemon | rfc5424.Priority(int(p)),
+		Timestamp: time.Now(),
+		Hostname:  hostname,
+		AppName:   appname,
+		ProcessID: os.Getppid(),
+		Message:   []byte(msg),
+	}
+
+	b, err := m.MarshalBinary()
+	if err != nil {
 		return err
 	}
-	timestamp := time.Now().Format(time.RFC3339)
-	_, err := fmt.Fprintf(n.conn, "<%d>%s %s %s[%d]: %s%s",
-		p, timestamp, hostname,
-		tag, os.Getpid(), msg, nl)
+	_, err = fmt.Fprintf(n.conn, "%d %s%s", len(b), b, nl)
+
 	return err
 }
 

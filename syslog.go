@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"strconv"
 	"github.com/crewjam/rfc5424"
 )
 
@@ -297,7 +298,7 @@ func (n *netConn) writeString(p Priority, hostname, appname, msg, nl string) err
 		Timestamp: time.Now(),
 		Hostname:  hostname,
 		AppName:   appname,
-		ProcessID: string(os.Getppid()),
+		ProcessID: strconv.Itoa(os.Getpid()),
 		Message:   []byte(msg),
 	}
 
